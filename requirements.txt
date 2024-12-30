@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+firebase-admin
+web3
+mysql-connector-python
+python-dotenv
