@@ -1,0 +1,7 @@
+# Ignorar el entorno virtual y archivos grandes
+env/
+*.dll
+*.lib
+node_modules/
+__pycache__/
+*.pyc
