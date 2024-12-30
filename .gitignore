@@ -5,3 +5,7 @@ env/
 node_modules/
 __pycache__/
 *.pyc
+
+# Ignorar archivos generados por bfg
+..bfg-report/
+bfg-*.jar
