@@ -7,40 +7,47 @@ import mysql.connector
 import jwt
 import datetime
 import openai
+import os
 
-# Inicializa Firebase
-cred = credentials.Certificate("C:\\Users\\Salaz\\Videos\\FINTT\\backend\\serviceAccountKey.json")
+# Configuración de Firebase desde el archivo secreto en Render
+firebase_credentials_path = "/etc/secrets/firebase_credentials.json"
+if not os.path.exists(firebase_credentials_path):
+    raise FileNotFoundError(f"El archivo {firebase_credentials_path} no existe.")
+
+cred = credentials.Certificate(firebase_credentials_path)
 initialize_app(cred)
 
 # Configuración de OpenAI
-openai.api_key = "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"
+openai.api_key = os.getenv("OPENAI_API_KEY")
+if not openai.api_key:
+    raise ValueError("La clave de API de OpenAI no está configurada. Verifica las variables de entorno.")
 
-# Conexión a MySQL
+# Configuración de la conexión a MySQL
 db = mysql.connector.connect(
-    host="localhost",
-    user="fint_user",
-    password="casattiel",
-    database="fint_db"
+    host=os.getenv("DB_HOST", "localhost"),
+    user=os.getenv("DB_USER", "fint_user"),
+    password=os.getenv("DB_PASSWORD", "casattiel"),
+    database=os.getenv("DB_NAME", "fint_db")
 )
 
-# Inicializa FastAPI
+# Inicialización de la app FastAPI
 app = FastAPI()
 
 # Configuración JWT
-SECRET_KEY = "YOUR_SECRET_KEY"
+SECRET_KEY = os.getenv("SECRET_KEY", "YOUR_SECRET_KEY")
 ALGORITHM = "HS256"
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
-# Middleware CORS
+# Configuración de CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["*"],  # Cambiar según el dominio permitido en producción
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Modelos
+# Modelos de datos
 class RegisterRequest(BaseModel):
     email: str
     password: str
@@ -53,7 +60,7 @@ class LoginRequest(BaseModel):
 class ChatRequest(BaseModel):
     message: str
 
-# Función auxiliar: Crear JWT
+# Función auxiliar para crear un token JWT
 def create_jwt_token(user):
     payload = {
         "sub": user["uid"],
@@ -90,7 +97,7 @@ def login_user(request: LoginRequest):
         raise HTTPException(status_code=400, detail=f"Login failed: {str(e)}")
 
 @app.post("/chat")
-def fintto_chat(request: ChatRequest):
+def fintt_chat(request: ChatRequest):
     try:
         response = openai.Completion.create(
             engine="text-davinci-003",
@@ -100,4 +107,9 @@ def fintto_chat(request: ChatRequest):
         )
         return {"response": response.choices[0].text.strip()}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error with Fintto Chat: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error with Fintt Chat: {str(e)}")
+
+# Endpoint de salud para Render
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
