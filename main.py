@@ -4,16 +4,16 @@ from mysql.connector import Error
 from fastapi import FastAPI, HTTPException
 from dotenv import load_dotenv
 
-# Carga variables de entorno desde un archivo .env (si estás en local)
+# Carga variables de entorno desde Render o un archivo .env
 load_dotenv()
 
 app = FastAPI()
 
 # Configuración directa con los datos de tu base de datos en Amazon RDS
-DB_HOST = "fint-db.ctkokc288j85.us-east-2.rds.amazonaws.com"
-DB_NAME = "fint_db"
-DB_USER = "fint_user"
-DB_PASSWORD = "JesusismyLord33!"
+DB_HOST = os.getenv("DB_HOST", "fint-db.ctkokc288j85.us-east-2.rds.amazonaws.com")
+DB_NAME = os.getenv("DB_NAME", "fint_db")
+DB_USER = os.getenv("DB_USER", "fint_user")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "JesusismyLord33!")
 
 @app.on_event("startup")
 async def startup_event():
@@ -77,7 +77,6 @@ async def delete_user(user_id: int):
 @app.post("/fintto_chat")
 async def fintto_chat(question: str):
     try:
-        # Simula una respuesta de chat inteligente
         response = f"Fintto Chat dice: La respuesta a tu pregunta '{question}' está en proceso de desarrollo."
         return {"question": question, "response": response}
     except Exception as err:
