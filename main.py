@@ -1,132 +1,136 @@
 import os
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from dotenv import load_dotenv
-from firebase_admin import credentials, initialize_app, auth
 import mysql.connector
+from mysql.connector import Error
+from fastapi import FastAPI, HTTPException
+from dotenv import load_dotenv
 
-# Cargar variables de entorno
+# Carga variables de entorno desde un archivo .env (si estás en local)
 load_dotenv()
 
-# Inicializar Firebase
-firebase_credentials_path = "/etc/secrets/firebase_credentials.json"
-try:
-    cred = credentials.Certificate(firebase_credentials_path)
-    initialize_app(cred)
-except Exception as e:
-    raise Exception(f"Error inicializando Firebase: {e}")
-
-# Inicializar conexión a MySQL
-try:
-    db = mysql.connector.connect(
-        host=os.getenv("DB_HOST"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD"),
-        database=os.getenv("DB_NAME"),
-        port=int(os.getenv("DB_PORT", 3306))
-    )
-except mysql.connector.Error as err:
-    raise Exception(f"Error conectando a MySQL: {err}")
-
-# Inicializar FastAPI
 app = FastAPI()
 
-# Modelos de datos
-class User(BaseModel):
-    email: str
-    name: str
+# Configuración directa con los datos de tu base de datos en Amazon RDS
+DB_HOST = "fint-db.ctkokc288j85.us-east-2.rds.amazonaws.com"
+DB_NAME = "fint_db"
+DB_USER = "fint_user"
+DB_PASSWORD = "JesusismyLord33!"
 
-class LoanRequest(BaseModel):
-    user_id: int
-    amount: float
-    duration: int  # en meses
+@app.on_event("startup")
+async def startup_event():
+    try:
+        global db
+        db = mysql.connector.connect(
+            host=DB_HOST,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            database=DB_NAME,
+        )
+        if db.is_connected():
+            print("Conexión exitosa a la base de datos")
+    except Error as err:
+        raise Exception(f"Error conectando a MySQL: {err}")
 
-class Trade(BaseModel):
-    user_id: int
-    crypto: str
-    amount: float
-    trade_type: str  # "buy" o "sell"
-
-# Rutas de ejemplo
+@app.on_event("shutdown")
+async def shutdown_event():
+    if db.is_connected():
+        db.close()
+        print("Conexión a la base de datos cerrada")
 
 @app.get("/")
 async def root():
-    return {"message": "FINTT Backend is running successfully!"}
+    return {"message": "FINTT Backend is running!"}
 
-# Registro de usuarios
-@app.post("/register")
-async def register_user(user: User):
-    try:
-        cursor = db.cursor()
-        cursor.execute("INSERT INTO users (email, name) VALUES (%s, %s)", (user.email, user.name))
-        db.commit()
-        return {"message": "User registered successfully!"}
-    except mysql.connector.Error as err:
-        raise HTTPException(status_code=500, detail=f"Error registrando usuario: {err}")
-
-# Obtener todos los usuarios
+# Funcionalidades de la base de datos de usuarios
 @app.get("/users")
 async def get_users():
     try:
         cursor = db.cursor(dictionary=True)
         cursor.execute("SELECT * FROM users")
         users = cursor.fetchall()
-        return {"users": users}
-    except mysql.connector.Error as err:
-        raise HTTPException(status_code=500, detail=f"Error obteniendo usuarios: {err}")
+        return users
+    except Error as err:
+        raise HTTPException(status_code=500, detail=f"Error al obtener usuarios: {err}")
 
-# Solicitar préstamo
-@app.post("/loans/request")
-async def request_loan(loan: LoanRequest):
+@app.post("/add_user")
+async def add_user(name: str, email: str, country: str):
     try:
         cursor = db.cursor()
-        cursor.execute(
-            "INSERT INTO loans (user_id, amount, duration) VALUES (%s, %s, %s)",
-            (loan.user_id, loan.amount, loan.duration)
-        )
+        query = "INSERT INTO users (name, email, country) VALUES (%s, %s, %s)"
+        cursor.execute(query, (name, email, country))
         db.commit()
-        return {"message": "Loan request submitted successfully!"}
-    except mysql.connector.Error as err:
-        raise HTTPException(status_code=500, detail=f"Error solicitando préstamo: {err}")
+        return {"message": "Usuario añadido exitosamente"}
+    except Error as err:
+        raise HTTPException(status_code=500, detail=f"Error al añadir usuario: {err}")
 
-# Obtener préstamos de un usuario
+@app.delete("/delete_user/{user_id}")
+async def delete_user(user_id: int):
+    try:
+        cursor = db.cursor()
+        query = "DELETE FROM users WHERE id = %s"
+        cursor.execute(query, (user_id,))
+        db.commit()
+        return {"message": "Usuario eliminado exitosamente"}
+    except Error as err:
+        raise HTTPException(status_code=500, detail=f"Error al eliminar usuario: {err}")
+
+# Funcionalidades de Fintto Chat
+@app.post("/fintto_chat")
+async def fintto_chat(question: str):
+    try:
+        # Simula una respuesta de chat inteligente
+        response = f"Fintto Chat dice: La respuesta a tu pregunta '{question}' está en proceso de desarrollo."
+        return {"question": question, "response": response}
+    except Exception as err:
+        raise HTTPException(status_code=500, detail=f"Error en Fintto Chat: {err}")
+
+# Funcionalidades de DeFintt Loans
+@app.post("/apply_loan")
+async def apply_loan(user_id: int, amount: float, duration_months: int):
+    try:
+        cursor = db.cursor()
+        query = """
+        INSERT INTO loans (user_id, amount, duration_months, status)
+        VALUES (%s, %s, %s, %s)
+        """
+        cursor.execute(query, (user_id, amount, duration_months, "pending"))
+        db.commit()
+        return {"message": "Solicitud de préstamo enviada exitosamente", "loan_id": cursor.lastrowid}
+    except Error as err:
+        raise HTTPException(status_code=500, detail=f"Error al solicitar préstamo: {err}")
+
 @app.get("/loans/{user_id}")
-async def get_user_loans(user_id: int):
+async def get_loans(user_id: int):
     try:
         cursor = db.cursor(dictionary=True)
-        cursor.execute("SELECT * FROM loans WHERE user_id = %s", (user_id,))
+        query = "SELECT * FROM loans WHERE user_id = %s"
+        cursor.execute(query, (user_id,))
         loans = cursor.fetchall()
-        return {"loans": loans}
-    except mysql.connector.Error as err:
-        raise HTTPException(status_code=500, detail=f"Error obteniendo préstamos: {err}")
+        return loans
+    except Error as err:
+        raise HTTPException(status_code=500, detail=f"Error al obtener préstamos: {err}")
 
-# Realizar trading (Broker Portal)
-@app.post("/broker/trade")
-async def broker_trade(trade: Trade):
+# Funcionalidades de Fintt Broker
+@app.post("/invest")
+async def invest(user_id: int, asset: str, amount: float):
     try:
         cursor = db.cursor()
-        cursor.execute(
-            "INSERT INTO trades (user_id, crypto, amount, trade_type) VALUES (%s, %s, %s, %s)",
-            (trade.user_id, trade.crypto, trade.amount, trade.trade_type)
-        )
+        query = """
+        INSERT INTO investments (user_id, asset, amount)
+        VALUES (%s, %s, %s)
+        """
+        cursor.execute(query, (user_id, asset, amount))
         db.commit()
-        return {"message": f"Trade {'bought' if trade.trade_type == 'buy' else 'sold'} successfully!"}
-    except mysql.connector.Error as err:
-        raise HTTPException(status_code=500, detail=f"Error realizando trading: {err}")
+        return {"message": "Inversión realizada exitosamente", "investment_id": cursor.lastrowid}
+    except Error as err:
+        raise HTTPException(status_code=500, detail=f"Error al realizar inversión: {err}")
 
-# Obtener transacciones del Broker Portal
-@app.get("/broker/trades/{user_id}")
-async def get_user_trades(user_id: int):
+@app.get("/investments/{user_id}")
+async def get_investments(user_id: int):
     try:
         cursor = db.cursor(dictionary=True)
-        cursor.execute("SELECT * FROM trades WHERE user_id = %s", (user_id,))
-        trades = cursor.fetchall()
-        return {"trades": trades}
-    except mysql.connector.Error as err:
-        raise HTTPException(status_code=500, detail=f"Error obteniendo transacciones: {err}")
-
-# Asesor financiero (ejemplo básico con respuesta fija)
-@app.get("/advisor")
-async def financial_advisor():
-    advice = "Diversifica tus inversiones en activos seguros y de mayor riesgo según tu perfil."
-    return {"advice": advice}
+        query = "SELECT * FROM investments WHERE user_id = %s"
+        cursor.execute(query, (user_id,))
+        investments = cursor.fetchall()
+        return investments
+    except Error as err:
+        raise HTTPException(status_code=500, detail=f"Error al obtener inversiones: {err}")
