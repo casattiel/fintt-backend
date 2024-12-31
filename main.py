@@ -1,115 +1,132 @@
-from fastapi import FastAPI, HTTPException, Depends
-from pydantic import BaseModel
-from firebase_admin import auth, credentials, initialize_app
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import OAuth2PasswordBearer
-import mysql.connector
-import jwt
-import datetime
-import openai
 import os
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from dotenv import load_dotenv
+from firebase_admin import credentials, initialize_app, auth
+import mysql.connector
 
-# Configuración de Firebase desde el archivo secreto en Render
+# Cargar variables de entorno
+load_dotenv()
+
+# Inicializar Firebase
 firebase_credentials_path = "/etc/secrets/firebase_credentials.json"
-if not os.path.exists(firebase_credentials_path):
-    raise FileNotFoundError(f"El archivo {firebase_credentials_path} no existe.")
+try:
+    cred = credentials.Certificate(firebase_credentials_path)
+    initialize_app(cred)
+except Exception as e:
+    raise Exception(f"Error inicializando Firebase: {e}")
 
-cred = credentials.Certificate(firebase_credentials_path)
-initialize_app(cred)
+# Inicializar conexión a MySQL
+try:
+    db = mysql.connector.connect(
+        host=os.getenv("DB_HOST"),
+        user=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASSWORD"),
+        database=os.getenv("DB_NAME"),
+        port=int(os.getenv("DB_PORT", 3306))
+    )
+except mysql.connector.Error as err:
+    raise Exception(f"Error conectando a MySQL: {err}")
 
-# Configuración de OpenAI
-openai.api_key = os.getenv("OPENAI_API_KEY")
-if not openai.api_key:
-    raise ValueError("La clave de API de OpenAI no está configurada. Verifica las variables de entorno.")
-
-# Configuración de la conexión a MySQL
-db = mysql.connector.connect(
-    host=os.getenv("DB_HOST", "localhost"),
-    user=os.getenv("DB_USER", "fint_user"),
-    password=os.getenv("DB_PASSWORD", "casattiel"),
-    database=os.getenv("DB_NAME", "fint_db")
-)
-
-# Inicialización de la app FastAPI
+# Inicializar FastAPI
 app = FastAPI()
 
-# Configuración JWT
-SECRET_KEY = os.getenv("SECRET_KEY", "YOUR_SECRET_KEY")
-ALGORITHM = "HS256"
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
-
-# Configuración de CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Cambiar según el dominio permitido en producción
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 # Modelos de datos
-class RegisterRequest(BaseModel):
+class User(BaseModel):
     email: str
-    password: str
     name: str
 
-class LoginRequest(BaseModel):
-    email: str
-    password: str
+class LoanRequest(BaseModel):
+    user_id: int
+    amount: float
+    duration: int  # en meses
 
-class ChatRequest(BaseModel):
-    message: str
+class Trade(BaseModel):
+    user_id: int
+    crypto: str
+    amount: float
+    trade_type: str  # "buy" o "sell"
 
-# Función auxiliar para crear un token JWT
-def create_jwt_token(user):
-    payload = {
-        "sub": user["uid"],
-        "name": user["name"],
-        "email": user["email"],
-        "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=1),
-    }
-    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+# Rutas de ejemplo
 
-# Endpoints
 @app.get("/")
-def root():
-    return {"message": "Welcome to FINTT, your global financial advisor!"}
+async def root():
+    return {"message": "FINTT Backend is running successfully!"}
 
+# Registro de usuarios
 @app.post("/register")
-def register_user(request: RegisterRequest):
+async def register_user(user: User):
     try:
-        user = auth.create_user(email=request.email, password=request.password, display_name=request.name)
         cursor = db.cursor()
-        cursor.execute("INSERT INTO users (name, email, country) VALUES (%s, %s, 'Unknown')",
-                       (request.name, request.email))
+        cursor.execute("INSERT INTO users (email, name) VALUES (%s, %s)", (user.email, user.name))
         db.commit()
-        return {"message": f"User {request.name} registered successfully!"}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Error registering user: {str(e)}")
+        return {"message": "User registered successfully!"}
+    except mysql.connector.Error as err:
+        raise HTTPException(status_code=500, detail=f"Error registrando usuario: {err}")
 
-@app.post("/login")
-def login_user(request: LoginRequest):
+# Obtener todos los usuarios
+@app.get("/users")
+async def get_users():
     try:
-        user = auth.get_user_by_email(request.email)
-        token = create_jwt_token({"uid": user.uid, "name": user.display_name, "email": user.email})
-        return {"access_token": token, "token_type": "bearer"}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Login failed: {str(e)}")
+        cursor = db.cursor(dictionary=True)
+        cursor.execute("SELECT * FROM users")
+        users = cursor.fetchall()
+        return {"users": users}
+    except mysql.connector.Error as err:
+        raise HTTPException(status_code=500, detail=f"Error obteniendo usuarios: {err}")
 
-@app.post("/chat")
-def fintt_chat(request: ChatRequest):
+# Solicitar préstamo
+@app.post("/loans/request")
+async def request_loan(loan: LoanRequest):
     try:
-        response = openai.Completion.create(
-            engine="text-davinci-003",
-            prompt=request.message,
-            max_tokens=100,
-            temperature=0.7
+        cursor = db.cursor()
+        cursor.execute(
+            "INSERT INTO loans (user_id, amount, duration) VALUES (%s, %s, %s)",
+            (loan.user_id, loan.amount, loan.duration)
         )
-        return {"response": response.choices[0].text.strip()}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error with Fintt Chat: {str(e)}")
+        db.commit()
+        return {"message": "Loan request submitted successfully!"}
+    except mysql.connector.Error as err:
+        raise HTTPException(status_code=500, detail=f"Error solicitando préstamo: {err}")
 
-# Endpoint de salud para Render
-@app.get("/health")
-def health_check():
-    return {"status": "ok"}
+# Obtener préstamos de un usuario
+@app.get("/loans/{user_id}")
+async def get_user_loans(user_id: int):
+    try:
+        cursor = db.cursor(dictionary=True)
+        cursor.execute("SELECT * FROM loans WHERE user_id = %s", (user_id,))
+        loans = cursor.fetchall()
+        return {"loans": loans}
+    except mysql.connector.Error as err:
+        raise HTTPException(status_code=500, detail=f"Error obteniendo préstamos: {err}")
+
+# Realizar trading (Broker Portal)
+@app.post("/broker/trade")
+async def broker_trade(trade: Trade):
+    try:
+        cursor = db.cursor()
+        cursor.execute(
+            "INSERT INTO trades (user_id, crypto, amount, trade_type) VALUES (%s, %s, %s, %s)",
+            (trade.user_id, trade.crypto, trade.amount, trade.trade_type)
+        )
+        db.commit()
+        return {"message": f"Trade {'bought' if trade.trade_type == 'buy' else 'sold'} successfully!"}
+    except mysql.connector.Error as err:
+        raise HTTPException(status_code=500, detail=f"Error realizando trading: {err}")
+
+# Obtener transacciones del Broker Portal
+@app.get("/broker/trades/{user_id}")
+async def get_user_trades(user_id: int):
+    try:
+        cursor = db.cursor(dictionary=True)
+        cursor.execute("SELECT * FROM trades WHERE user_id = %s", (user_id,))
+        trades = cursor.fetchall()
+        return {"trades": trades}
+    except mysql.connector.Error as err:
+        raise HTTPException(status_code=500, detail=f"Error obteniendo transacciones: {err}")
+
+# Asesor financiero (ejemplo básico con respuesta fija)
+@app.get("/advisor")
+async def financial_advisor():
+    advice = "Diversifica tus inversiones en activos seguros y de mayor riesgo según tu perfil."
+    return {"advice": advice}
