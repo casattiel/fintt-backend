@@ -6,8 +6,8 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 import hashlib
-from datetime import datetime
-from fastapi import APIRouter
+from subscriptions import router as subscriptions_router
+from fintto_chat import router as fintto_chat_router
 
 # Carga variables de entorno desde Render o un archivo .env
 load_dotenv()
@@ -60,16 +60,11 @@ class RegisterData(BaseModel):
     password: str
     country: str
 
-# Modelo para suscripciones
-class SubscriptionData(BaseModel):
-    user_id: int
-    plan: str
-
 # Función para hashear contraseñas
 def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
-# Endpoints para registro
+# Endpoint para registro
 @app.post("/register")
 async def register(data: RegisterData):
     try:
@@ -107,56 +102,48 @@ async def login(data: LoginData):
     except Error as err:
         raise HTTPException(status_code=500, detail=f"Error al iniciar sesión: {err}")
 
-# Router para Fintto Chat
-chat_router = APIRouter()
-
-class ChatMessage(BaseModel):
-    question: str
-
-@chat_router.post("/chat")
-async def fintto_chat(data: ChatMessage):
-    try:
-        user_question = data.question.lower()
-
-        # Lógica básica para respuestas
-        if "bolsa" in user_question:
-            response = "Para invertir en la bolsa, necesitas abrir una cuenta con un broker y elegir tus activos."
-        elif "criptomonedas" in user_question:
-            response = "Las criptomonedas son activos digitales que puedes adquirir en plataformas como Binance o Coinbase."
-        else:
-            response = f"Fintto Chat dice: La respuesta a tu pregunta '{data.question}' será más detallada en el futuro."
-
-        return {"question": data.question, "response": response}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error en Fintto Chat: {str(e)}")
-
-app.include_router(chat_router, prefix="/api")
-
-# Endpoint para suscripciones
-@app.post("/api/subscribe")
-async def subscribe(data: SubscriptionData):
-    try:
-        conn = db_pool.get_connection()
-        cursor = conn.cursor()
-        query = "INSERT INTO subscriptions (user_id, plan, created_at) VALUES (%s, %s, %s)"
-        cursor.execute(query, (data.user_id, data.plan, datetime.now()))
-        conn.commit()
-        cursor.close()
-        conn.close()
-        return {"message": "Suscripción creada exitosamente"}
-    except Error as err:
-        raise HTTPException(status_code=500, detail=f"Error al crear suscripción: {err}")
-
-@app.get("/api/subscriptions/{user_id}")
-async def get_subscriptions(user_id: int):
+# Funcionalidades de la base de datos de usuarios
+@app.get("/users")
+async def get_users():
     try:
         conn = db_pool.get_connection()
         cursor = conn.cursor(dictionary=True)
-        query = "SELECT * FROM subscriptions WHERE user_id = %s"
-        cursor.execute(query, (user_id,))
-        subscriptions = cursor.fetchall()
+        cursor.execute("SELECT * FROM users")
+        users = cursor.fetchall()
         cursor.close()
         conn.close()
-        return subscriptions
+        return users
     except Error as err:
-        raise HTTPException(status_code=500, detail=f"Error al obtener suscripciones: {err}")
+        raise HTTPException(status_code=500, detail=f"Error al obtener usuarios: {err}")
+
+@app.post("/add_user")
+async def add_user(name: str, email: str, country: str):
+    try:
+        conn = db_pool.get_connection()
+        cursor = conn.cursor()
+        query = "INSERT INTO users (name, email, country) VALUES (%s, %s, %s)"
+        cursor.execute(query, (name, email, country))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return {"message": "Usuario añadido exitosamente"}
+    except Error as err:
+        raise HTTPException(status_code=500, detail=f"Error al añadir usuario: {err}")
+
+@app.delete("/delete_user/{user_id}")
+async def delete_user(user_id: int):
+    try:
+        conn = db_pool.get_connection()
+        cursor = conn.cursor()
+        query = "DELETE FROM users WHERE id = %s"
+        cursor.execute(query, (user_id,))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return {"message": "Usuario eliminado exitosamente"}
+    except Error as err:
+        raise HTTPException(status_code=500, detail=f"Error al eliminar usuario: {err}")
+
+# Incluir routers
+app.include_router(subscriptions_router)
+app.include_router(fintto_chat_router, prefix="/api")
