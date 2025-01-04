@@ -2,12 +2,23 @@ import os
 import mysql.connector
 from mysql.connector import Error
 from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 from dotenv import load_dotenv
+from fastapi.middleware.cors import CORSMiddleware
 
 # Carga variables de entorno desde Render o un archivo .env
 load_dotenv()
 
 app = FastAPI()
+
+# Configuración de CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Cambia "*" por tu dominio de Netlify si quieres restringirlo
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Configuración directa con los datos de tu base de datos en Amazon RDS
 DB_HOST = os.getenv("DB_HOST", "fint-db.ctkokc288j85.us-east-2.rds.amazonaws.com")
@@ -39,6 +50,28 @@ async def shutdown_event():
 @app.get("/")
 async def root():
     return {"message": "FINTT Backend is running!"}
+
+# Modelo para el login
+class LoginData(BaseModel):
+    email: str
+    password: str
+
+# Endpoint para login
+@app.post("/login")
+async def login(data: LoginData):
+    try:
+        cursor = db.cursor(dictionary=True)
+        query = "SELECT * FROM users WHERE email = %s AND password = %s"
+        cursor.execute(query, (data.email, data.password))
+        user = cursor.fetchone()
+        
+        if not user:
+            raise HTTPException(status_code=401, detail="Credenciales inválidas")
+
+        cursor.close()
+        return {"message": "Inicio de sesión exitoso", "user": user}
+    except Error as err:
+        raise HTTPException(status_code=500, detail=f"Error al iniciar sesión: {err}")
 
 # Funcionalidades de la base de datos de usuarios
 @app.get("/users")
