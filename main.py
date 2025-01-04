@@ -5,6 +5,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
+import hashlib
 
 # Carga variables de entorno desde Render o un archivo .env
 load_dotenv()
@@ -56,20 +57,47 @@ class LoginData(BaseModel):
     email: str
     password: str
 
+# Modelo para el registro
+class RegisterData(BaseModel):
+    name: str
+    email: str
+    password: str
+    country: str
+
+# Función para hashear contraseñas
+def hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
+
+# Endpoint para registro
+@app.post("/register")
+async def register(data: RegisterData):
+    try:
+        cursor = db.cursor()
+        hashed_password = hash_password(data.password)
+        query = "INSERT INTO users (name, email, password, country) VALUES (%s, %s, %s, %s)"
+        cursor.execute(query, (data.name, data.email, hashed_password, data.country))
+        db.commit()
+        return {"message": "Usuario registrado exitosamente"}
+    except mysql.connector.IntegrityError:
+        raise HTTPException(status_code=400, detail="El correo electrónico ya está registrado")
+    except Error as err:
+        raise HTTPException(status_code=500, detail=f"Error al registrar usuario: {err}")
+
 # Endpoint para login
 @app.post("/login")
 async def login(data: LoginData):
     try:
         cursor = db.cursor(dictionary=True)
+        hashed_password = hash_password(data.password)
         query = "SELECT * FROM users WHERE email = %s AND password = %s"
-        cursor.execute(query, (data.email, data.password))
+        cursor.execute(query, (data.email, hashed_password))
         user = cursor.fetchone()
         
         if not user:
             raise HTTPException(status_code=401, detail="Credenciales inválidas")
 
         cursor.close()
-        return {"message": "Inicio de sesión exitoso", "user": user}
+        return {"message": "Inicio de sesión exitoso", "user": {"id": user["id"], "name": user["name"], "email": user["email"]}}
     except Error as err:
         raise HTTPException(status_code=500, detail=f"Error al iniciar sesión: {err}")
 
