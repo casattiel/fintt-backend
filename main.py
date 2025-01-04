@@ -6,6 +6,8 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 import hashlib
+from datetime import datetime
+from fastapi import APIRouter
 
 # Carga variables de entorno desde Render o un archivo .env
 load_dotenv()
@@ -58,11 +60,16 @@ class RegisterData(BaseModel):
     password: str
     country: str
 
+# Modelo para suscripciones
+class SubscriptionData(BaseModel):
+    user_id: int
+    plan: str
+
 # Función para hashear contraseñas
 def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
-# Endpoint para registro
+# Endpoints para registro
 @app.post("/register")
 async def register(data: RegisterData):
     try:
@@ -90,7 +97,7 @@ async def login(data: LoginData):
         query = "SELECT * FROM users WHERE email = %s AND password = %s"
         cursor.execute(query, (data.email, hashed_password))
         user = cursor.fetchone()
-        
+
         if not user:
             raise HTTPException(status_code=401, detail="Credenciales inválidas")
 
@@ -100,117 +107,56 @@ async def login(data: LoginData):
     except Error as err:
         raise HTTPException(status_code=500, detail=f"Error al iniciar sesión: {err}")
 
-# Funcionalidades de la base de datos de usuarios
-@app.get("/users")
-async def get_users():
+# Router para Fintto Chat
+chat_router = APIRouter()
+
+class ChatMessage(BaseModel):
+    question: str
+
+@chat_router.post("/chat")
+async def fintto_chat(data: ChatMessage):
+    try:
+        user_question = data.question.lower()
+
+        # Lógica básica para respuestas
+        if "bolsa" in user_question:
+            response = "Para invertir en la bolsa, necesitas abrir una cuenta con un broker y elegir tus activos."
+        elif "criptomonedas" in user_question:
+            response = "Las criptomonedas son activos digitales que puedes adquirir en plataformas como Binance o Coinbase."
+        else:
+            response = f"Fintto Chat dice: La respuesta a tu pregunta '{data.question}' será más detallada en el futuro."
+
+        return {"question": data.question, "response": response}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error en Fintto Chat: {str(e)}")
+
+app.include_router(chat_router, prefix="/api")
+
+# Endpoint para suscripciones
+@app.post("/api/subscribe")
+async def subscribe(data: SubscriptionData):
+    try:
+        conn = db_pool.get_connection()
+        cursor = conn.cursor()
+        query = "INSERT INTO subscriptions (user_id, plan, created_at) VALUES (%s, %s, %s)"
+        cursor.execute(query, (data.user_id, data.plan, datetime.now()))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return {"message": "Suscripción creada exitosamente"}
+    except Error as err:
+        raise HTTPException(status_code=500, detail=f"Error al crear suscripción: {err}")
+
+@app.get("/api/subscriptions/{user_id}")
+async def get_subscriptions(user_id: int):
     try:
         conn = db_pool.get_connection()
         cursor = conn.cursor(dictionary=True)
-        cursor.execute("SELECT * FROM users")
-        users = cursor.fetchall()
-        cursor.close()
-        conn.close()
-        return users
-    except Error as err:
-        raise HTTPException(status_code=500, detail=f"Error al obtener usuarios: {err}")
-
-@app.post("/add_user")
-async def add_user(name: str, email: str, country: str):
-    try:
-        conn = db_pool.get_connection()
-        cursor = conn.cursor()
-        query = "INSERT INTO users (name, email, country) VALUES (%s, %s, %s)"
-        cursor.execute(query, (name, email, country))
-        conn.commit()
-        cursor.close()
-        conn.close()
-        return {"message": "Usuario añadido exitosamente"}
-    except Error as err:
-        raise HTTPException(status_code=500, detail=f"Error al añadir usuario: {err}")
-
-@app.delete("/delete_user/{user_id}")
-async def delete_user(user_id: int):
-    try:
-        conn = db_pool.get_connection()
-        cursor = conn.cursor()
-        query = "DELETE FROM users WHERE id = %s"
+        query = "SELECT * FROM subscriptions WHERE user_id = %s"
         cursor.execute(query, (user_id,))
-        conn.commit()
+        subscriptions = cursor.fetchall()
         cursor.close()
         conn.close()
-        return {"message": "Usuario eliminado exitosamente"}
+        return subscriptions
     except Error as err:
-        raise HTTPException(status_code=500, detail=f"Error al eliminar usuario: {err}")
-
-# Funcionalidades de Fintto Chat
-@app.post("/fintto_chat")
-async def fintto_chat(question: str):
-    try:
-        response = f"Fintto Chat dice: La respuesta a tu pregunta '{question}' está en proceso de desarrollo."
-        return {"question": question, "response": response}
-    except Exception as err:
-        raise HTTPException(status_code=500, detail=f"Error en Fintto Chat: {err}")
-
-# Funcionalidades de DeFintt Loans
-@app.post("/apply_loan")
-async def apply_loan(user_id: int, amount: float, duration_months: int):
-    try:
-        conn = db_pool.get_connection()
-        cursor = conn.cursor()
-        query = """
-        INSERT INTO loans (user_id, amount, duration_months, status)
-        VALUES (%s, %s, %s, %s)
-        """
-        cursor.execute(query, (user_id, amount, duration_months, "pending"))
-        conn.commit()
-        cursor.close()
-        conn.close()
-        return {"message": "Solicitud de préstamo enviada exitosamente", "loan_id": cursor.lastrowid}
-    except Error as err:
-        raise HTTPException(status_code=500, detail=f"Error al solicitar préstamo: {err}")
-
-@app.get("/loans/{user_id}")
-async def get_loans(user_id: int):
-    try:
-        conn = db_pool.get_connection()
-        cursor = conn.cursor(dictionary=True)
-        query = "SELECT * FROM loans WHERE user_id = %s"
-        cursor.execute(query, (user_id,))
-        loans = cursor.fetchall()
-        cursor.close()
-        conn.close()
-        return loans
-    except Error as err:
-        raise HTTPException(status_code=500, detail=f"Error al obtener préstamos: {err}")
-
-# Funcionalidades de Fintt Broker
-@app.post("/invest")
-async def invest(user_id: int, asset: str, amount: float):
-    try:
-        conn = db_pool.get_connection()
-        cursor = conn.cursor()
-        query = """
-        INSERT INTO investments (user_id, asset, amount)
-        VALUES (%s, %s, %s)
-        """
-        cursor.execute(query, (user_id, asset, amount))
-        conn.commit()
-        cursor.close()
-        conn.close()
-        return {"message": "Inversión realizada exitosamente", "investment_id": cursor.lastrowid}
-    except Error as err:
-        raise HTTPException(status_code=500, detail=f"Error al realizar inversión: {err}")
-
-@app.get("/investments/{user_id}")
-async def get_investments(user_id: int):
-    try:
-        conn = db_pool.get_connection()
-        cursor = conn.cursor(dictionary=True)
-        query = "SELECT * FROM investments WHERE user_id = %s"
-        cursor.execute(query, (user_id,))
-        investments = cursor.fetchall()
-        cursor.close()
-        conn.close()
-        return investments
-    except Error as err:
-        raise HTTPException(status_code=500, detail=f"Error al obtener inversiones: {err}")
+        raise HTTPException(status_code=500, detail=f"Error al obtener suscripciones: {err}")
