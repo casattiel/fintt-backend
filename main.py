@@ -2,7 +2,7 @@ import os
 import mysql.connector.pooling
 from mysql.connector import Error
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 import hashlib
@@ -10,35 +10,32 @@ import krakenex
 from subscriptions import router as subscriptions_router
 from fintto_chat import router as fintto_chat_router
 
-# Load environment variables
-load_dotenv()
+# Configuración directa de claves (usando las claves proporcionadas por ti)
+KRAKEN_API_KEY = "SzQ41RAGaxOFOxiqs88aQis8eCmGPJ5VpoR1Vz2ypP8kksjYUVXcWCQ7"
+KRAKEN_SECRET_KEY = "20dsWMlMOkGTEtRLKUWXYmR8DJNEzWnIHZyt3u7HxtkDNlcAJD6j7IIh0t0hQHe7fEPuSYJ7XXStTzk/A=="
+DB_HOST = "fint-db.ctkokc288j85.us-east-2.rds.amazonaws.com"
+DB_USER = "fint_user"
+DB_PASSWORD = "JesusismyLord33!"
+DB_NAME = "fint_db"
 
-# Environment variables for Kraken API and database
-KRAKEN_API_KEY = os.getenv("KRAKEN_API_KEY", "default_api_key")
-KRAKEN_SECRET_KEY = os.getenv("KRAKEN_SECRET_KEY", "default_secret_key")
-DB_HOST = os.getenv("DB_HOST", "localhost")
-DB_USER = os.getenv("DB_USER", "root")
-DB_PASSWORD = os.getenv("DB_PASSWORD", "password")
-DB_NAME = os.getenv("DB_NAME", "fint_db")
-
-# Initialize Kraken API
+# Inicializar la API de Kraken
 kraken_api = krakenex.API()
 kraken_api.key = KRAKEN_API_KEY
 kraken_api.secret = KRAKEN_SECRET_KEY
 
-# FastAPI application setup
+# Configuración de la aplicación FastAPI
 app = FastAPI()
 
-# Configure CORS
+# Configurar CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Update with your frontend URL for security
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Database connection pooling
+# Configuración de la base de datos (pool de conexiones)
 db_pool = mysql.connector.pooling.MySQLConnectionPool(
     pool_name="mypool",
     pool_size=5,
@@ -53,20 +50,20 @@ async def startup_event():
     try:
         conn = db_pool.get_connection()
         if conn.is_connected():
-            print("Database connection successful")
+            print("Conexión a la base de datos exitosa")
             conn.close()
     except Error as err:
-        raise Exception(f"Error connecting to MySQL: {err}")
+        raise Exception(f"Error al conectar con MySQL: {err}")
 
 @app.get("/")
 async def root():
-    return {"message": "FINTT Backend is running with Kraken integration!"}
+    return {"message": "FINTT Backend está funcionando con integración de Kraken."}
 
-# Utility functions
+# Función para hashear contraseñas
 def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
-# Models
+# Modelos de datos
 class LoginData(BaseModel):
     email: str
     password: str
@@ -79,15 +76,15 @@ class RegisterData(BaseModel):
 
 class TradeData(BaseModel):
     user_id: int
-    crypto_pair: str
+    crypto_pair: str  # Ejemplo: "XXBTZUSD" para BTC/USD en Kraken
     amount: float
-    action: str  # "buy" or "sell"
+    action: str  # "buy" o "sell"
 
 class SubscriptionUpgrade(BaseModel):
     user_id: int
-    new_plan: str  # "basic" or "premium"
+    new_plan: str  # "basic" o "premium"
 
-# Authentication endpoints
+# Endpoint para registrar usuarios
 @app.post("/register")
 async def register(data: RegisterData):
     try:
@@ -99,12 +96,13 @@ async def register(data: RegisterData):
         conn.commit()
         cursor.close()
         conn.close()
-        return {"message": "User registered successfully"}
+        return {"message": "Usuario registrado exitosamente"}
     except mysql.connector.IntegrityError:
-        raise HTTPException(status_code=400, detail="Email already registered")
+        raise HTTPException(status_code=400, detail="Correo ya registrado")
     except Error as err:
-        raise HTTPException(status_code=500, detail=f"Error registering user: {err}")
+        raise HTTPException(status_code=500, detail=f"Error al registrar usuario: {err}")
 
+# Endpoint para iniciar sesión
 @app.post("/login")
 async def login(data: LoginData):
     try:
@@ -116,20 +114,22 @@ async def login(data: LoginData):
         user = cursor.fetchone()
 
         if not user:
-            raise HTTPException(status_code=401, detail="Invalid credentials")
+            raise HTTPException(status_code=401, detail="Credenciales inválidas")
 
         cursor.close()
         conn.close()
-        return {"message": "Login successful", "user": {"id": user["id"], "name": user["name"], "email": user["email"]}}
+        return {"message": "Inicio de sesión exitoso", "user": {"id": user["id"], "name": user["name"], "email": user["email"]}}
     except Error as err:
-        raise HTTPException(status_code=500, detail=f"Error during login: {err}")
+        raise HTTPException(status_code=500, detail=f"Error durante el inicio de sesión: {err}")
 
-# Kraken trading endpoint
+# Endpoint para realizar trading con Kraken
 @app.post("/trade")
 async def execute_trade(data: TradeData):
     try:
         if data.action not in ["buy", "sell"]:
-            raise HTTPException(status_code=400, detail="Invalid action. Use 'buy' or 'sell'.")
+            raise HTTPException(status_code=400, detail="Acción inválida. Usa 'buy' o 'sell'.")
+
+        # Ejecución de la operación
         response = kraken_api.query_private('AddOrder', {
             'pair': data.crypto_pair,
             'type': data.action,
@@ -138,12 +138,13 @@ async def execute_trade(data: TradeData):
         })
 
         if response.get("error"):
-            raise HTTPException(status_code=500, detail=f"Kraken API error: {response['error']}")
+            raise HTTPException(status_code=500, detail=f"Error en Kraken API: {response['error']}")
 
-        return {"message": "Trade executed successfully", "details": response}
+        return {"message": "Operación ejecutada exitosamente", "details": response}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error executing trade: {e}")
+        raise HTTPException(status_code=500, detail=f"Error ejecutando la operación: {e}")
 
+# Endpoint para actualizar suscripción
 @app.post("/subscriptions/upgrade")
 async def upgrade_subscription(data: SubscriptionUpgrade):
     try:
@@ -154,18 +155,19 @@ async def upgrade_subscription(data: SubscriptionUpgrade):
         conn.commit()
         cursor.close()
         conn.close()
-        return {"message": "Subscription upgraded successfully", "new_plan": data.new_plan}
+        return {"message": "Suscripción actualizada exitosamente", "new_plan": data.new_plan}
     except Error as err:
-        raise HTTPException(status_code=500, detail=f"Error upgrading subscription: {err}")
+        raise HTTPException(status_code=500, detail=f"Error al actualizar suscripción: {err}")
 
+# Endpoint para obtener precios de mercado
 @app.get("/market/prices")
 async def get_market_prices():
     try:
         response = kraken_api.query_public('Ticker', {'pair': 'XXBTZUSD'})
         return response
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching market prices: {e}")
+        raise HTTPException(status_code=500, detail=f"Error al obtener precios del mercado: {e}")
 
-# Include additional routers
+# Incluir routers adicionales
 app.include_router(subscriptions_router)
 app.include_router(fintto_chat_router, prefix="/api")
