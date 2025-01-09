@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 import hashlib
 import krakenex
+import stripe
 from subscriptions import router as subscriptions_router
 from fintto_chat import router as fintto_chat_router
 
@@ -16,15 +17,17 @@ load_dotenv()
 # Configuration of API Keys and Database
 KRAKEN_API_KEY = os.getenv("KRAKEN_API_KEY", "SzQ41RAGaxOFOxiqs88aQis8eCmGPJ5VpoR1Vz2ypP8kksjYUVXcWCQ7")
 KRAKEN_SECRET_KEY = os.getenv("KRAKEN_SECRET_KEY", "Zo6J3HnywhPUkrUtnhKKu3UdnABtOHeEIEvWrGyHkloHNz++8K2UYeg/rHbNSY0HqUe7fEPuSYJ7XSXstTzk/A==")
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "sk_test_51QfQbOCFuzFSWK4L7KMEakMZVSFM7dCq2FHekAzw9Dj5gjgjEu3lXMXlCX2VJvFWqEYCm8mVYr9e2GHLu1anUBhM00HeEKCAwW")
 DB_HOST = os.getenv("DB_HOST", "fint-db.ctkokc288j85.us-east-2.rds.amazonaws.com")
 DB_USER = os.getenv("DB_USER", "fint_user")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "JesusismyLord33!")
 DB_NAME = os.getenv("DB_NAME", "fint_db")
 
-# Initialize Kraken API
+# Initialize Kraken and Stripe APIs
 kraken_api = krakenex.API()
 kraken_api.key = KRAKEN_API_KEY
 kraken_api.secret = KRAKEN_SECRET_KEY
+stripe.api_key = STRIPE_SECRET_KEY
 
 # Initialize FastAPI
 app = FastAPI()
@@ -41,7 +44,7 @@ app.add_middleware(
 # Database connection pooling
 db_pool = mysql.connector.pooling.MySQLConnectionPool(
     pool_name="mypool",
-    pool_size=10,  # Adjust pool size based on expected concurrent connections
+    pool_size=10,
     host=DB_HOST,
     user=DB_USER,
     password=DB_PASSWORD,
@@ -60,7 +63,7 @@ async def startup_event():
 
 @app.get("/")
 async def root():
-    return {"message": "FINTT Backend is running with Kraken integration!"}
+    return {"message": "FINTT Backend is running with Kraken and Stripe integrations!"}
 
 # Utility function to hash passwords
 def hash_password(password: str) -> str:
@@ -170,14 +173,25 @@ async def upgrade_subscription(data: SubscriptionUpgrade):
         if conn:
             conn.close()
 
-# Market prices endpoint
-@app.get("/market/prices")
-async def get_market_prices():
+# Stripe payment session endpoint
+@app.post("/api/stripe/create-checkout-session")
+async def create_checkout_session(plan_id: str):
     try:
-        response = kraken_api.query_public('Ticker', {'pair': 'XXBTZUSD'})
-        return response
+        session = stripe.checkout.Session.create(
+            payment_method_types=["card"],
+            line_items=[
+                {
+                    "price": plan_id,
+                    "quantity": 1,
+                },
+            ],
+            mode="subscription",
+            success_url="http://localhost:5173/success",
+            cancel_url="http://localhost:5173/cancel",
+        )
+        return {"url": session.url}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching market prices: {e}")
+        raise HTTPException(status_code=500, detail=f"Error creating Stripe checkout session: {e}")
 
 # Include additional routers
 app.include_router(subscriptions_router)
