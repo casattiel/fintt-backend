@@ -5,3 +5,4 @@ web3
 mysql-connector-python
 python-dotenv
 openai
+krakenex
