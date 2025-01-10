@@ -18,16 +18,17 @@ app = FastAPI()
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # Change this to specific domains in production for security
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Database initialization on app startup
 @app.on_event("startup")
 async def startup_event():
+    print("Initializing database connection pool...")
     init_db()
+    print("Database connection pool initialized successfully")
 
 @app.get("/")
 async def root():
@@ -38,4 +39,4 @@ app.include_router(auth_router, prefix="/auth", tags=["Authentication"])
 app.include_router(trade_router, prefix="/trade", tags=["Trade"])
 app.include_router(wallet_router, prefix="/wallets", tags=["Wallets"])
 app.include_router(subscription_router, prefix="/subscriptions", tags=["Subscriptions"])
-app.include_router(market_router, prefix="/market", tags=["Market Data"])
+app.include_router(market_router, prefix="/market", tags=["Market"])
