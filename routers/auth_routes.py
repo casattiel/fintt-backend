@@ -1,50 +1,31 @@
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, Depends
 from utils.db import db_pool
-from utils.hashing import hash_password
+from pydantic import BaseModel
+import bcrypt
 
 router = APIRouter()
-
-class RegisterData(BaseModel):
-    name: str
-    email: str
-    password: str
-    country: str
 
 class LoginData(BaseModel):
     email: str
     password: str
 
-@router.post("/register")
-async def register(data: RegisterData):
-    try:
-        conn = db_pool.get_connection()
-        cursor = conn.cursor()
-        hashed_password = hash_password(data.password)
-        query = "INSERT INTO users (name, email, password, country) VALUES (%s, %s, %s, %s)"
-        cursor.execute(query, (data.name, data.email, hashed_password, data.country))
-        conn.commit()
-        return {"message": "User registered successfully"}
-    except Exception as err:
-        raise HTTPException(status_code=500, detail=f"Error registering user: {err}")
-    finally:
-        cursor.close()
-        conn.close()
-
-@router.post("/login")
+@router.post("/login", tags=["Authentication"])
 async def login(data: LoginData):
     try:
         conn = db_pool.get_connection()
         cursor = conn.cursor(dictionary=True)
-        hashed_password = hash_password(data.password)
-        query = "SELECT * FROM users WHERE email = %s AND password = %s"
-        cursor.execute(query, (data.email, hashed_password))
+        cursor.execute("SELECT * FROM users WHERE email = %s", (data.email,))
         user = cursor.fetchone()
-        if not user:
+
+        if not user or not bcrypt.checkpw(data.password.encode("utf-8"), user["password"].encode("utf-8")):
             raise HTTPException(status_code=401, detail="Invalid credentials")
-        return {"message": "Login successful", "user": user}
+
+        return {"user": {"id": user["id"], "email": user["email"], "name": user["name"]}}
+
     except Exception as err:
         raise HTTPException(status_code=500, detail=f"Error during login: {err}")
     finally:
-        cursor.close()
-        conn.close()
+        if 'cursor' in locals():
+            cursor.close()
+        if 'conn' in locals():
+            conn.close()

@@ -35,7 +35,7 @@ async def root():
     return {"message": "FINTT Backend is running with all integrations!"}
 
 # Include modularized routers with corrected endpoint prefixes
-app.include_router(auth_router, prefix="", tags=["Authentication"])  # Remove `/auth` prefix
+app.include_router(auth_router, prefix="", tags=["Authentication"])  # Only login route at the root
 app.include_router(trade_router, prefix="/trade", tags=["Trade"])
 app.include_router(wallet_router, prefix="/wallets", tags=["Wallets"])
 app.include_router(subscription_router, prefix="/subscriptions", tags=["Subscriptions"])
