@@ -2,7 +2,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
-from utils.db import init_db
+from utils.db import init_db, get_db_pool
 from routers.auth_routes import router as auth_router
 from routers.trade_routes import router as trade_router
 from routers.wallet_routes import router as wallet_router
@@ -15,10 +15,13 @@ load_dotenv()
 # Initialize FastAPI
 app = FastAPI()
 
+# Global database pool
+db_pool = None
+
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Update with specific domains in production
+    allow_origins=["*"],  # Allow all origins for testing; restrict in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -27,13 +30,21 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup_event():
     """Startup event to initialize database."""
-    print("Starting up...")
+    global db_pool
     try:
-        init_db()
-        print("Database connection initialized successfully!")
+        db_pool = init_db()
+        print("Database connection pool initialized successfully!")
     except Exception as e:
         print(f"Failed to initialize database: {e}")
         raise e
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Shutdown event to close database connections."""
+    global db_pool
+    if db_pool:
+        db_pool.close()
+        print("Database connection pool closed.")
 
 @app.get("/")
 async def root():
