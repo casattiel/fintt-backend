@@ -10,11 +10,18 @@ def initialize_firebase():
     Inicializa Firebase usando las variables de entorno.
     """
     try:
+        # Depurar el contenido del private_key para asegurar que tiene saltos de línea reales
+        private_key = os.getenv("FIREBASE_PRIVATE_KEY", "").replace("\\n", "\n")
+        
+        if not private_key.startswith("-----BEGIN PRIVATE KEY-----"):
+            print("❌ Formato incorrecto de FIREBASE_PRIVATE_KEY. Verifica los saltos de línea.")
+            raise ValueError("Formato incorrecto de FIREBASE_PRIVATE_KEY.")
+        
         cred = credentials.Certificate({
             "type": "service_account",
             "project_id": os.getenv("FIREBASE_PROJECT_ID"),
             "private_key_id": os.getenv("FIREBASE_PRIVATE_KEY_ID"),
-            "private_key": os.getenv("FIREBASE_PRIVATE_KEY").replace("\\n", "\n"),  # Reemplaza \n si existen
+            "private_key": private_key,
             "client_email": os.getenv("FIREBASE_CLIENT_EMAIL"),
             "client_id": os.getenv("FIREBASE_CLIENT_ID"),
             "auth_uri": os.getenv("FIREBASE_AUTH_URI"),
