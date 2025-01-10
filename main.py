@@ -1,3 +1,4 @@
+# main.py
 import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,12 +19,13 @@ app = FastAPI()
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # Allow all origins for testing; restrict in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# Initialize database connection pool
 @app.on_event("startup")
 async def startup_event():
     print("Initializing database connection pool...")
@@ -34,9 +36,11 @@ async def startup_event():
 async def root():
     return {"message": "FINTT Backend is running with all integrations!"}
 
-# Include routers
+# Include modularized routers
 app.include_router(auth_router, prefix="", tags=["Authentication"])
 app.include_router(trade_router, prefix="/trade", tags=["Trade"])
 app.include_router(wallet_router, prefix="/wallets", tags=["Wallets"])
 app.include_router(subscription_router, prefix="/subscriptions", tags=["Subscriptions"])
 app.include_router(market_router, prefix="/market", tags=["Market"])
+
+# Ensure the app runs smoothly
