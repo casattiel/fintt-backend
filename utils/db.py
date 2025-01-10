@@ -1,28 +1,29 @@
 import mysql.connector
-from mysql.connector import pooling
+from dotenv import load_dotenv
 import os
 
-# Global database pool
+load_dotenv()
+
 db_pool = None
 
 def init_db():
-    """Initialize the database connection pool."""
     global db_pool
-    if db_pool is None:
-        db_pool = pooling.MySQLConnectionPool(
-            pool_name="fintt_pool",
-            pool_size=5,  # Adjust based on your app's requirements
-            pool_reset_session=True,
+    try:
+        db_pool = mysql.connector.connect(
             host=os.getenv("DB_HOST"),
             user=os.getenv("DB_USER"),
             password=os.getenv("DB_PASSWORD"),
             database=os.getenv("DB_NAME"),
+            pool_name="mypool",
+            pool_size=5,
         )
-    return db_pool
+        print("Database connection pool initialized")
+    except mysql.connector.Error as err:
+        print(f"Error initializing DB connection pool: {err}")
+        raise
 
-def get_db_pool():
-    """Retrieve the initialized database connection pool."""
+def get_db_connection():
     global db_pool
     if not db_pool:
-        raise Exception("Database connection pool has not been initialized.")
+        raise Exception("Database connection pool is not initialized.")
     return db_pool

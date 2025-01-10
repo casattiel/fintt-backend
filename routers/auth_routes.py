@@ -1,31 +1,40 @@
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
-from utils.db import get_db_pool
+from utils.db import get_db_connection
+from bcrypt import hashpw, gensalt
+import mysql.connector
 
 router = APIRouter()
 
-# Define a Pydantic model for the request body
-class LoginRequest(BaseModel):
+class RegisterRequest(BaseModel):
     email: str
     password: str
+    confirm_password: str
 
-@router.post("/login")
-async def login(request: LoginRequest):
+@router.post("/register")
+async def register_user(request: RegisterRequest):
+    if request.password != request.confirm_password:
+        raise HTTPException(status_code=400, detail="Passwords do not match")
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
     try:
-        db_pool = get_db_pool()  # Get the database pool
-        conn = db_pool.get_connection()
-        cursor = conn.cursor(dictionary=True)
+        # Check if user already exists
+        cursor.execute("SELECT email FROM users WHERE email = %s", (request.email,))
+        existing_user = cursor.fetchone()
+        if existing_user:
+            raise HTTPException(status_code=400, detail="User already exists")
         
-        # Query user by email
-        cursor.execute("SELECT * FROM users WHERE email = %s", (request.email,))
-        user = cursor.fetchone()
+        # Hash the password
+        hashed_password = hashpw(request.password.encode("utf-8"), gensalt()).decode("utf-8")
+
+        # Insert new user
+        cursor.execute("INSERT INTO users (email, password) VALUES (%s, %s)", (request.email, hashed_password))
+        conn.commit()
+        return {"message": "User registered successfully."}
+    except mysql.connector.Error as err:
+        raise HTTPException(status_code=500, detail=f"Database error: {err}")
+    finally:
         cursor.close()
         conn.close()
-
-        if not user or user["password"] != request.password:
-            raise HTTPException(status_code=401, detail="Invalid credentials")
-
-        return {"message": "Login successful", "user": {"id": user["id"], "email": user["email"]}}
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error during login: {e}")
