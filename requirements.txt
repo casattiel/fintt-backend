@@ -7,4 +7,3 @@ python-dotenv
 openai
 krakenex
 stripe==11.4.1
-bcrypt

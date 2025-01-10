@@ -1,40 +1,38 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from firebase_admin import auth
 from utils.db import get_db_connection
-from bcrypt import hashpw, gensalt
-import mysql.connector
 
 router = APIRouter()
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
 
 class RegisterRequest(BaseModel):
     email: str
     password: str
     confirm_password: str
 
+@router.post("/login")
+async def login_user(request: LoginRequest):
+    try:
+        # Verificar credenciales en Firebase
+        user = auth.get_user_by_email(request.email)
+        if user.email_verified:  # Ejemplo: Verificar si el usuario está verificado
+            return {"message": "Login successful", "user": user.email}
+        else:
+            raise HTTPException(status_code=401, detail="Email not verified")
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Error during login: {e}")
+
 @router.post("/register")
 async def register_user(request: RegisterRequest):
     if request.password != request.confirm_password:
         raise HTTPException(status_code=400, detail="Passwords do not match")
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
     try:
-        # Check if user already exists
-        cursor.execute("SELECT email FROM users WHERE email = %s", (request.email,))
-        existing_user = cursor.fetchone()
-        if existing_user:
-            raise HTTPException(status_code=400, detail="User already exists")
-        
-        # Hash the password
-        hashed_password = hashpw(request.password.encode("utf-8"), gensalt()).decode("utf-8")
-
-        # Insert new user
-        cursor.execute("INSERT INTO users (email, password) VALUES (%s, %s)", (request.email, hashed_password))
-        conn.commit()
-        return {"message": "User registered successfully."}
-    except mysql.connector.Error as err:
-        raise HTTPException(status_code=500, detail=f"Database error: {err}")
-    finally:
-        cursor.close()
-        conn.close()
+        # Crear usuario en Firebase
+        user = auth.create_user(email=request.email, password=request.password)
+        return {"message": "User registered successfully", "user": user.email}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error during registration: {e}")

@@ -1,46 +1,30 @@
-# main.py
-import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from dotenv import load_dotenv
 from routers.auth_routes import router as auth_router
-from routers.trade_routes import router as trade_router
-from routers.wallet_routes import router as wallet_router
-from routers.subscription_routes import router as subscription_router
-from routers.market_routes import router as market_router
 from utils.db import init_db
 
-# Load environment variables
-load_dotenv()
-
-# Initialize FastAPI
+# Configurar la app FastAPI
 app = FastAPI()
 
-# Configure CORS
+# Configuración de CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins for testing; restrict in production
+    allow_origins=["*"],  # Cambia esto en producción para mayor seguridad
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Initialize database connection pool
+# Inicializar conexión con la base de datos al arrancar
 @app.on_event("startup")
 async def startup_event():
-    print("Initializing database connection pool...")
     init_db()
-    print("Database connection pool initialized successfully")
+    print("Database initialized.")
 
+# Rutas principales
 @app.get("/")
 async def root():
-    return {"message": "FINTT Backend is running with all integrations!"}
+    return {"message": "FINTT Backend is running!"}
 
-# Include modularized routers
+# Incluir rutas de autenticación
 app.include_router(auth_router, prefix="", tags=["Authentication"])
-app.include_router(trade_router, prefix="/trade", tags=["Trade"])
-app.include_router(wallet_router, prefix="/wallets", tags=["Wallets"])
-app.include_router(subscription_router, prefix="/subscriptions", tags=["Subscriptions"])
-app.include_router(market_router, prefix="/market", tags=["Market"])
-
-# Ensure the app runs smoothly
