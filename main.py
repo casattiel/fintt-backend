@@ -24,17 +24,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Startup event to initialize database connection
 @app.on_event("startup")
 async def startup_event():
     print("Initializing database connection pool...")
     init_db()
     print("Database connection pool initialized successfully")
 
+# Test route to check if the server is live
 @app.get("/")
 async def root():
     return {"message": "FINTT Backend is running with all integrations!"}
 
-# Include modularized routers
+# Include modularized routers for endpoints
 app.include_router(auth_router, prefix="/auth", tags=["Authentication"])
 app.include_router(trade_router, prefix="/trade", tags=["Trade"])
 app.include_router(wallet_router, prefix="/wallets", tags=["Wallets"])
