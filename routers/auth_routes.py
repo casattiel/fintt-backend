@@ -1,8 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, EmailStr
-from firebase_admin import auth
-from firebase_admin.auth import UserNotFoundError, EmailAlreadyExistsError
-from utils.db import get_db_connection
+from firebase_admin import auth, exceptions
 
 router = APIRouter()
 
@@ -20,14 +18,14 @@ class RegisterRequest(BaseModel):
 @router.post("/login")
 async def login_user(request: LoginRequest):
     """
-    Log in a user by verifying their existence in Firebase. Note that password validation must be handled in the frontend.
+    Simulates login by checking if a user exists in Firebase.
+    Note: Password validation is handled client-side using Firebase Authentication SDK.
     """
     try:
-        # Fetch user by email
+        # Check if user exists in Firebase
         user = auth.get_user_by_email(request.email)
 
-        # Simulate successful login
-        # Firebase Admin SDK does not handle password verification; use Firebase Auth SDK on the client-side.
+        # Return user info (password validation happens on the frontend)
         return {
             "message": "Login successful",
             "user": {
@@ -36,7 +34,7 @@ async def login_user(request: LoginRequest):
                 "email_verified": user.email_verified,
             },
         }
-    except UserNotFoundError:
+    except exceptions.NotFoundError:
         raise HTTPException(status_code=404, detail="User not found")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error during login: {str(e)}")
@@ -45,17 +43,16 @@ async def login_user(request: LoginRequest):
 @router.post("/register")
 async def register_user(request: RegisterRequest):
     """
-    Register a new user in Firebase.
+    Registers a user in Firebase and returns their info.
     """
-    # Check password confirmation
     if request.password != request.confirm_password:
         raise HTTPException(status_code=400, detail="Passwords do not match")
-    
+
     try:
         # Create user in Firebase
         user = auth.create_user(
             email=request.email,
-            password=request.password
+            password=request.password,
         )
         return {
             "message": "User registered successfully",
@@ -64,7 +61,7 @@ async def register_user(request: RegisterRequest):
                 "uid": user.uid,
             },
         }
-    except EmailAlreadyExistsError:
+    except exceptions.AlreadyExistsError:
         raise HTTPException(status_code=400, detail="Email already exists")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error during registration: {str(e)}")
