@@ -1,4 +1,5 @@
 import os
+import stripe
 import mysql.connector.pooling
 from mysql.connector import Error
 from fastapi import FastAPI, HTTPException
@@ -7,8 +8,9 @@ from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 import hashlib
 import requests
-from subscriptions import router as subscriptions_router
-from fintto_chat import router as fintto_chat_router
+import time
+import hmac
+import base64
 
 # Load environment variables
 load_dotenv()
@@ -24,6 +26,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Stripe Configuration
+stripe.api_key = os.getenv("STRIPE_SECRET_KEY", "sk_test_51QfQbOCFuzFSWK4L7KMEakMZVSFM7dCq2FHekAzw9Dj5gjgjEu3lXMXlCX2VJvFWqEYCm8mVYr9e2GHLu1anUBhM00HeEKCAwW")
+BASIC_PLAN_PRICE_ID = "price_1QfCzWCFuzFSWK4Lr4Lo26jX"
+PREMIUM_PLAN_PRICE_ID = "price_1QfD4WCFuzFSWK4LzFLo36jX"
+
+# Kraken API Configuration
+KRAKEN_API_KEY = os.getenv("KRAKEN_API_KEY", "y0R5IG8Hamnc6ifMdaugcebvLDoFHRVh/4re8EKkohCGR1/qyNQQLCu+")
+KRAKEN_API_SECRET = os.getenv("KRAKEN_API_SECRET", "mX9TDrjxpWFckAnOqoZ1Mi3XjnJjGUyxJVrR7DAEbJv/tG6DhMSt2LUUTNLOwOIi7NrXMYrzOZOY8DramPHRWA==")
+KRAKEN_API_URL = "https://api.kraken.com/0"
+
 # Database configuration
 db_config = {
     "host": os.getenv("DB_HOST", "fint-db.ctkokc288j85.us-east-2.rds.amazonaws.com"),
@@ -33,10 +45,6 @@ db_config = {
 }
 
 db_pool = mysql.connector.pooling.MySQLConnectionPool(pool_name="mypool", pool_size=5, **db_config)
-
-# Crypto API Configuration
-CRYPTO_API_URL = "https://api.coingecko.com/api/v3"
-TOP_10_CRYPTOS = ["bitcoin", "ethereum", "binancecoin", "ripple", "cardano", "dogecoin", "solana", "polkadot", "polygon", "litecoin"]
 
 @app.on_event("startup")
 async def startup_event():
@@ -63,22 +71,48 @@ class RegisterData(BaseModel):
     password: str
     country: str
 
+class SubscriptionData(BaseModel):
+    email: str
+    plan: str  # "basic" or "premium"
+
 class TradeData(BaseModel):
     user_id: int
     crypto: str
     amount: float
 
-class TransactionLog(BaseModel):
+class WalletData(BaseModel):
     user_id: int
-    crypto: str
-    action: str  # "buy" or "sell"
+    type: str  # "hot" or "cold"
     amount: float
-    price: float
-    timestamp: str
 
 # Utility functions
 def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
+
+def kraken_api_request(endpoint: str, data=None, is_private=False):
+    headers = {}
+    url = f"{KRAKEN_API_URL}/{endpoint}"
+
+    if is_private:
+        nonce = str(int(time.time() * 1000))
+        post_data = f"nonce={nonce}"
+        if data:
+            post_data += "&" + "&".join(f"{key}={value}" for key, value in data.items())
+        message = f"{nonce}{post_data}".encode("utf-8")
+        signature = hmac.new(
+            base64.b64decode(KRAKEN_API_SECRET),
+            f"/0/{endpoint}".encode("utf-8") + hashlib.sha256(message).digest(),
+            hashlib.sha512
+        )
+        headers["API-Key"] = KRAKEN_API_KEY
+        headers["API-Sign"] = base64.b64encode(signature.digest())
+    else:
+        post_data = None
+        if data:
+            post_data = data
+
+    response = requests.post(url, headers=headers, data=post_data)
+    return response.json()
 
 # Authentication endpoints
 @app.post("/register")
@@ -117,151 +151,43 @@ async def login(data: LoginData):
     except Error as err:
         raise HTTPException(status_code=500, detail=f"Error during login: {err}")
 
-# Wallet endpoints
-@app.get("/wallets/hot")
-async def get_hot_wallet(user_id: int):
+# Market endpoint
+@app.get("/market")
+async def get_market_data():
     try:
-        conn = db_pool.get_connection()
-        cursor = conn.cursor(dictionary=True)
-        query = "SELECT * FROM wallets WHERE user_id = %s AND type = 'hot'"
-        cursor.execute(query, (user_id,))
-        wallet = cursor.fetchone()
-        cursor.close()
-        conn.close()
-        return wallet if wallet else {"message": "Hot wallet not found"}
-    except Error as err:
-        raise HTTPException(status_code=500, detail=f"Error fetching hot wallet: {err}")
+        response = kraken_api_request("public/AssetPairs")
+        if "error" in response and response["error"]:
+            raise HTTPException(status_code=500, detail="Error fetching market data")
 
-@app.get("/wallets/cold")
-async def get_cold_wallet(user_id: int):
-    try:
-        conn = db_pool.get_connection()
-        cursor = conn.cursor(dictionary=True)
-        query = "SELECT * FROM wallets WHERE user_id = %s AND type = 'cold'"
-        cursor.execute(query, (user_id,))
-        wallet = cursor.fetchone()
-        cursor.close()
-        conn.close()
-        return wallet if wallet else {"message": "Cold wallet not found"}
-    except Error as err:
-        raise HTTPException(status_code=500, detail=f"Error fetching cold wallet: {err}")
+        pairs = [pair for pair in response["result"]]
+        ticker_response = kraken_api_request(f"public/Ticker?pair={','.join(pairs)}")
+        if "error" in ticker_response and ticker_response["error"]:
+            raise HTTPException(status_code=500, detail="Error fetching ticker data")
+
+        market_data = {}
+        for pair, info in ticker_response["result"].items():
+            market_data[pair] = {
+                "ask": info["a"][0],
+                "bid": info["b"][0],
+                "last_trade": info["c"][0],
+            }
+        return market_data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching market data: {str(e)}")
 
 # Trading endpoints
 @app.post("/trade/buy")
 async def buy_crypto(data: TradeData):
-    try:
-        # Fetch real-time price
-        response = requests.get(f"{CRYPTO_API_URL}/simple/price?ids={data.crypto}&vs_currencies=usd")
-        price_data = response.json()
-        price = price_data.get(data.crypto, {}).get("usd")
-
-        if not price:
-            raise HTTPException(status_code=404, detail="Crypto not found")
-
-        total_cost = price * data.amount
-
-        # Deduct from hot wallet
-        conn = db_pool.get_connection()
-        cursor = conn.cursor()
-        query = "UPDATE wallets SET balance = balance - %s WHERE user_id = %s AND type = 'hot'"
-        cursor.execute(query, (total_cost, data.user_id))
-        conn.commit()
-        cursor.close()
-        conn.close()
-
-        return {"message": "Crypto purchased successfully", "crypto": data.crypto, "amount": data.amount, "price": price}
-    except Error as err:
-        raise HTTPException(status_code=500, detail=f"Error buying crypto: {err}")
+    # Buying logic here
+    pass
 
 @app.post("/trade/sell")
 async def sell_crypto(data: TradeData):
-    try:
-        # Fetch real-time price
-        response = requests.get(f"{CRYPTO_API_URL}/simple/price?ids={data.crypto}&vs_currencies=usd")
-        price_data = response.json()
-        price = price_data.get(data.crypto, {}).get("usd")
+    # Selling logic here
+    pass
 
-        if not price:
-            raise HTTPException(status_code=404, detail="Crypto not found")
-
-        total_earnings = price * data.amount
-
-        # Add to hot wallet
-        conn = db_pool.get_connection()
-        cursor = conn.cursor()
-        query = "UPDATE wallets SET balance = balance + %s WHERE user_id = %s AND type = 'hot'"
-        cursor.execute(query, (total_earnings, data.user_id))
-        conn.commit()
-        cursor.close()
-        conn.close()
-
-        return {"message": "Crypto sold successfully", "crypto": data.crypto, "amount": data.amount, "price": price}
-    except Error as err:
-        raise HTTPException(status_code=500, detail=f"Error selling crypto: {err}")
-
-# Portfolio endpoints
-@app.get("/portfolio")
-async def get_portfolio(user_id: int):
-    try:
-        conn = db_pool.get_connection()
-        cursor = conn.cursor(dictionary=True)
-        query = "SELECT crypto, amount FROM portfolio WHERE user_id = %s"
-        cursor.execute(query, (user_id,))
-        portfolio = cursor.fetchall()
-        cursor.close()
-        conn.close()
-
-        # Fetch real-time prices
-        response = requests.get(f"{CRYPTO_API_URL}/simple/price?ids={','.join(TOP_10_CRYPTOS)}&vs_currencies=usd")
-        prices = response.json()
-
-        # Calculate portfolio value
-        portfolio_value = []
-        total_value = 0
-        for asset in portfolio:
-            price = prices.get(asset["crypto"], {}).get("usd", 0)
-            value = price * asset["amount"]
-            total_value += value
-            portfolio_value.append({"crypto": asset["crypto"], "amount": asset["amount"], "value": value})
-
-        return {"portfolio": portfolio_value, "total_value": total_value}
-    except Error as err:
-        raise HTTPException(status_code=500, detail=f"Error fetching portfolio: {err}")
-
-@app.get("/portfolio/performance")
-async def get_portfolio_performance(user_id: int):
-    # Placeholder for historical performance data
-    return {"message": "Performance data endpoint under construction"}
-
-# Transaction history
-@app.get("/transactions")
-async def get_transactions(user_id: int):
-    try:
-        conn = db_pool.get_connection()
-        cursor = conn.cursor(dictionary=True)
-        query = "SELECT * FROM transactions WHERE user_id = %s ORDER BY timestamp DESC"
-        cursor.execute(query, (user_id,))
-        transactions = cursor.fetchall()
-        cursor.close()
-        conn.close()
-        return transactions
-    except Error as err:
-        raise HTTPException(status_code=500, detail=f"Error fetching transactions: {err}")
-
-@app.post("/transactions")
-async def log_transaction(data: TransactionLog):
-    try:
-        conn = db_pool.get_connection()
-        cursor = conn.cursor()
-        query = "INSERT INTO transactions (user_id, crypto, action, amount, price, timestamp) VALUES (%s, %s, %s, %s, %s, %s)"
-        cursor.execute(query, (data.user_id, data.crypto, data.action, data.amount, data.price, data.timestamp))
-        conn.commit()
-        cursor.close()
-        conn.close()
-        return {"message": "Transaction logged successfully"}
-    except Error as err:
-        raise HTTPException(status_code=500, detail=f"Error logging transaction: {err}")
-
-# Include routers
-app.include_router(subscriptions_router)
-app.include_router(fintto_chat_router, prefix="/api")
+# Wallet endpoints
+@app.get("/wallet")
+async def get_wallet(user_id: int, type: str):
+    # Wallet retrieval logic here
+    pass
