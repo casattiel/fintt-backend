@@ -12,11 +12,16 @@ import time
 import hmac
 import base64
 from firebase_admin import credentials, auth, initialize_app
+import logging
 
 # Load environment variables
 load_dotenv()
 
 app = FastAPI()
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
+logger = logging.getLogger(__name__)
 
 # Configure CORS
 app.add_middleware(
@@ -45,8 +50,6 @@ initialize_app(cred)
 
 # Stripe Configuration
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
-BASIC_PLAN_PRICE_ID = "price_1QfCzWCFuzFSWK4Lr4Lo26jX"
-PREMIUM_PLAN_PRICE_ID = "price_1QfD4WCFuzFSWK4LzFLo36jX"
 
 # Kraken API Configuration
 KRAKEN_API_KEY = os.getenv("KRAKEN_API_KEY")
@@ -81,14 +84,15 @@ async def startup_event():
     try:
         conn = db_pool.get_connection()
         if conn.is_connected():
-            print("Database connection successful")
+            logger.info("Database connection successful")
             conn.close()
     except Error as err:
+        logger.error(f"Error connecting to MySQL: {err}")
         raise Exception(f"Error connecting to MySQL: {err}")
 
 @app.get("/")
 async def root():
-    return {"message": "FINTT Backend is running with full broker functionality!"}
+    return {"message": "FINTT Backend is running with updated functionality!"}
 
 # Models
 class TradeData(BaseModel):
@@ -97,9 +101,6 @@ class TradeData(BaseModel):
     amount: float
 
 # Utility functions
-def hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode()).hexdigest()
-
 def kraken_api_request(endpoint: str, data=None, is_private=False):
     headers = {}
     url = f"{KRAKEN_API_URL}/{endpoint}"
@@ -118,22 +119,19 @@ def kraken_api_request(endpoint: str, data=None, is_private=False):
         headers["API-Key"] = KRAKEN_API_KEY
         headers["API-Sign"] = base64.b64encode(signature.digest())
     else:
-        post_data = None
-        if data:
-            post_data = data
+        post_data = data if data else None
 
     response = requests.post(url, headers=headers, data=post_data)
     return response.json()
 
-# Middleware for Firebase authentication
 async def verify_user(token: str):
     try:
         decoded_token = auth.verify_id_token(token)
         return decoded_token
     except Exception as e:
+        logger.error(f"Firebase token verification failed: {e}")
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-# Market endpoint
 @app.get("/market")
 async def get_market_data():
     try:
@@ -158,13 +156,12 @@ async def get_market_data():
             }
         return market_data
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching market data: {str(e)}")
+        logger.error(f"Error fetching market data: {e}")
+        raise HTTPException(status_code=500, detail="Error fetching market data")
 
-# Buy endpoint
 @app.post("/trade/buy")
 async def buy_crypto(data: TradeData, user=Depends(verify_user)):
     try:
-        # Get market price
         response = kraken_api_request(f"public/Ticker?pair={data.crypto}USD")
         if "error" in response and response["error"]:
             raise HTTPException(status_code=404, detail="Crypto not found")
@@ -172,13 +169,11 @@ async def buy_crypto(data: TradeData, user=Depends(verify_user)):
         price = float(response["result"][f"X{data.crypto}ZUSD"]["c"][0])
         total_cost = price * data.amount
 
-        # Deduct balance from wallet
         conn = db_pool.get_connection()
         cursor = conn.cursor()
         cursor.execute("UPDATE wallets SET balance = balance - %s WHERE user_id = %s AND type = 'hot'", (total_cost, user["uid"]))
         conn.commit()
 
-        # Add crypto to portfolio
         cursor.execute(
             "INSERT INTO portfolio (user_id, crypto, amount) VALUES (%s, %s, %s) ON DUPLICATE KEY UPDATE amount = amount + %s",
             (user["uid"], data.crypto, data.amount, data.amount),
@@ -189,13 +184,12 @@ async def buy_crypto(data: TradeData, user=Depends(verify_user)):
 
         return {"message": "Crypto purchased successfully", "crypto": data.crypto, "amount": data.amount, "price": price}
     except Error as e:
-        raise HTTPException(status_code=500, detail=f"Error buying crypto: {str(e)}")
+        logger.error(f"Error buying crypto: {e}")
+        raise HTTPException(status_code=500, detail="Error buying crypto")
 
-# Sell endpoint
 @app.post("/trade/sell")
 async def sell_crypto(data: TradeData, user=Depends(verify_user)):
     try:
-        # Get market price
         response = kraken_api_request(f"public/Ticker?pair={data.crypto}USD")
         if "error" in response and response["error"]:
             raise HTTPException(status_code=404, detail="Crypto not found")
@@ -203,13 +197,11 @@ async def sell_crypto(data: TradeData, user=Depends(verify_user)):
         price = float(response["result"][f"X{data.crypto}ZUSD"]["c"][0])
         total_earnings = price * data.amount
 
-        # Deduct crypto from portfolio
         conn = db_pool.get_connection()
         cursor = conn.cursor()
         cursor.execute("UPDATE portfolio SET amount = amount - %s WHERE user_id = %s AND crypto = %s", (data.amount, user["uid"], data.crypto))
         conn.commit()
 
-        # Add balance to wallet
         cursor.execute("UPDATE wallets SET balance = balance + %s WHERE user_id = %s AND type = 'hot'", (total_earnings, user["uid"]))
         conn.commit()
         cursor.close()
@@ -217,4 +209,5 @@ async def sell_crypto(data: TradeData, user=Depends(verify_user)):
 
         return {"message": "Crypto sold successfully", "crypto": data.crypto, "amount": data.amount, "price": price}
     except Error as e:
-        raise HTTPException(status_code=500, detail=f"Error selling crypto: {str(e)}")
+        logger.error(f"Error selling crypto: {e}")
+        raise HTTPException(status_code=500, detail="Error selling crypto")
