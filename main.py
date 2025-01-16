@@ -165,94 +165,44 @@ async def get_market_data():
         logger.error(f"Error fetching market data: {e}")
         raise HTTPException(status_code=500, detail="Error fetching market data")
 
-@app.post("/trade/buy")
-async def buy_crypto(data: TradeData, request: Request):
+@app.get("/wallet")
+async def get_wallet_data(request: Request):
     user = await verify_user(request.headers.get("Authorization"))
     try:
-        pair = f"X{data.crypto}ZUSD"
-        response = kraken_api_request(f"public/Ticker?pair={pair}")
-        if "error" in response and response["error"]:
-            raise HTTPException(status_code=404, detail="Crypto not found")
-
-        price = float(response["result"][pair]["c"][0])
-        total_cost = price * data.amount
-
         conn = db_pool.get_connection()
         cursor = conn.cursor(dictionary=True)
-
-        cursor.execute("SELECT balance FROM wallets WHERE user_id = %s", (user["uid"],))
-        wallet = cursor.fetchone()
-        if not wallet or wallet["balance"] < total_cost:
-            raise HTTPException(status_code=400, detail="Insufficient balance")
-
-        cursor.execute("UPDATE wallets SET balance = balance - %s WHERE user_id = %s", (total_cost, user["uid"]))
-        cursor.execute(
-            "INSERT INTO portfolio (user_id, crypto, amount) VALUES (%s, %s, %s) "
-            "ON DUPLICATE KEY UPDATE amount = amount + %s",
-            (user["uid"], data.crypto, data.amount, data.amount)
-        )
-        conn.commit()
-        return {"message": "Crypto purchased successfully"}
+        cursor.execute("SELECT type, balance FROM wallets WHERE user_id = %s", (user["uid"],))
+        wallets = cursor.fetchall()
+        conn.close()
+        return {"wallets": wallets}
     except Exception as e:
-        logger.error(f"Error buying crypto: {e}")
-        raise HTTPException(status_code=500, detail="Error processing trade")
+        logger.error(f"Error fetching wallet data: {e}")
+        raise HTTPException(status_code=500, detail="Error fetching wallet data")
 
-@app.post("/trade/sell")
-async def sell_crypto(data: TradeData, request: Request):
+@app.get("/notifications")
+async def get_notifications(request: Request):
     user = await verify_user(request.headers.get("Authorization"))
     try:
-        pair = f"X{data.crypto}ZUSD"
-        response = kraken_api_request(f"public/Ticker?pair={pair}")
-        if "error" in response and response["error"]:
-            raise HTTPException(status_code=404, detail="Crypto not found")
-
-        price = float(response["result"][pair]["c"][0])
-        total_earnings = price * data.amount
-
         conn = db_pool.get_connection()
         cursor = conn.cursor(dictionary=True)
-
-        cursor.execute("SELECT amount FROM portfolio WHERE user_id = %s AND crypto = %s", (user["uid"], data.crypto))
-        portfolio = cursor.fetchone()
-        if not portfolio or portfolio["amount"] < data.amount:
-            raise HTTPException(status_code=400, detail="Insufficient crypto balance")
-
-        cursor.execute("UPDATE portfolio SET amount = amount - %s WHERE user_id = %s AND crypto = %s", (data.amount, user["uid"], data.crypto))
-        cursor.execute("UPDATE wallets SET balance = balance + %s WHERE user_id = %s", (total_earnings, user["uid"]))
-        conn.commit()
-        return {"message": "Crypto sold successfully"}
+        cursor.execute("SELECT message, date FROM notifications WHERE user_id = %s ORDER BY date DESC", (user["uid"],))
+        notifications = cursor.fetchall()
+        conn.close()
+        return {"notifications": notifications}
     except Exception as e:
-        logger.error(f"Error selling crypto: {e}")
-        raise HTTPException(status_code=500, detail="Error processing trade")
+        logger.error(f"Error fetching notifications: {e}")
+        raise HTTPException(status_code=500, detail="Error fetching notifications")
 
-@app.post("/subscription")
-async def subscribe(data: SubscriptionData, request: Request):
+@app.get("/portfolio")
+async def get_portfolio(request: Request):
     user = await verify_user(request.headers.get("Authorization"))
     try:
-        plan_price = 30 if data.plan.lower() == "basic" else 70
         conn = db_pool.get_connection()
         cursor = conn.cursor(dictionary=True)
-        cursor.execute("INSERT INTO subscriptions (user_id, plan, price, is_active) VALUES (%s, %s, %s, 1) ON DUPLICATE KEY UPDATE plan=%s, price=%s, is_active=1",
-                       (user["uid"], data.plan, plan_price, data.plan, plan_price))
-        conn.commit()
-        return {"message": f"Subscribed to {data.plan} plan successfully"}
+        cursor.execute("SELECT crypto, amount FROM portfolio WHERE user_id = %s", (user["uid"],))
+        portfolio = cursor.fetchall()
+        conn.close()
+        return {"portfolio": portfolio}
     except Exception as e:
-        logger.error(f"Error processing subscription: {e}")
-        raise HTTPException(status_code=500, detail="Error processing subscription")
-
-@app.middleware("http")
-async def enforce_subscription(request: Request, call_next):
-    token = request.headers.get("Authorization")
-    if not token:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
-    user = await verify_user(token)
-    conn = db_pool.get_connection()
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute("SELECT * FROM subscriptions WHERE user_id = %s AND is_active = 1", (user["uid"],))
-    subscription = cursor.fetchone()
-    conn.close()
-
-    if not subscription:
-        raise HTTPException(status_code=403, detail="Subscription required")
-    return await call_next(request)
+        logger.error(f"Error fetching portfolio: {e}")
+        raise HTTPException(status_code=500, detail="Error fetching portfolio")
