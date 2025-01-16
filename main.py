@@ -2,7 +2,7 @@ import os
 import stripe
 import mysql.connector.pooling
 from mysql.connector import Error
-from fastapi import FastAPI, HTTPException, Depends, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -62,22 +62,9 @@ db_config = {
     "user": os.getenv("DB_USER"),
     "password": os.getenv("DB_PASSWORD"),
     "database": os.getenv("DB_NAME"),
+    "port": os.getenv("DB_PORT"),
 }
 db_pool = mysql.connector.pooling.MySQLConnectionPool(pool_name="mypool", pool_size=5, **db_config)
-
-# Friendly crypto names mapping
-CRYPTO_NAMES = {
-    "BTC": "Bitcoin",
-    "ETH": "Ethereum",
-    "ADA": "Cardano",
-    "DOT": "Polkadot",
-    "DOGE": "Dogecoin",
-    "XRP": "Ripple",
-    "LTC": "Litecoin",
-    "USDT": "Tether",
-    "SOL": "Solana",
-    "BNB": "Binance Coin",
-}
 
 # Models
 class TradeData(BaseModel):
@@ -153,9 +140,8 @@ async def get_market_data():
         market_data = []
         for pair, info in ticker_response["result"].items():
             base_currency = pair[:3]
-            friendly_name = CRYPTO_NAMES.get(base_currency, base_currency)
             market_data.append({
-                "crypto": friendly_name,
+                "crypto": base_currency,
                 "last_price": info["c"][0],
                 "bid": info["b"][0],
                 "ask": info["a"][0]
@@ -165,44 +151,49 @@ async def get_market_data():
         logger.error(f"Error fetching market data: {e}")
         raise HTTPException(status_code=500, detail="Error fetching market data")
 
-@app.get("/wallet")
-async def get_wallet_data(request: Request):
+@app.post("/trade/buy")
+async def buy_crypto(data: TradeData, request: Request):
     user = await verify_user(request.headers.get("Authorization"))
     try:
-        conn = db_pool.get_connection()
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute("SELECT type, balance FROM wallets WHERE user_id = %s", (user["uid"],))
-        wallets = cursor.fetchall()
-        conn.close()
-        return {"wallets": wallets}
-    except Exception as e:
-        logger.error(f"Error fetching wallet data: {e}")
-        raise HTTPException(status_code=500, detail="Error fetching wallet data")
+        pair = f"X{data.crypto}ZUSD"
+        response = kraken_api_request(f"public/Ticker?pair={pair}")
+        if "error" in response and response["error"]:
+            raise HTTPException(status_code=404, detail="Crypto not found")
 
-@app.get("/notifications")
-async def get_notifications(request: Request):
-    user = await verify_user(request.headers.get("Authorization"))
-    try:
-        conn = db_pool.get_connection()
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute("SELECT message, date FROM notifications WHERE user_id = %s ORDER BY date DESC", (user["uid"],))
-        notifications = cursor.fetchall()
-        conn.close()
-        return {"notifications": notifications}
-    except Exception as e:
-        logger.error(f"Error fetching notifications: {e}")
-        raise HTTPException(status_code=500, detail="Error fetching notifications")
+        price = float(response["result"][pair]["c"][0])
+        total_cost = price * data.amount
 
-@app.get("/portfolio")
-async def get_portfolio(request: Request):
-    user = await verify_user(request.headers.get("Authorization"))
-    try:
         conn = db_pool.get_connection()
         cursor = conn.cursor(dictionary=True)
-        cursor.execute("SELECT crypto, amount FROM portfolio WHERE user_id = %s", (user["uid"],))
-        portfolio = cursor.fetchall()
-        conn.close()
-        return {"portfolio": portfolio}
+
+        cursor.execute("SELECT balance FROM wallets WHERE user_id = %s", (user["uid"],))
+        wallet = cursor.fetchone()
+        if not wallet or wallet["balance"] < total_cost:
+            raise HTTPException(status_code=400, detail="Insufficient balance")
+
+        cursor.execute("UPDATE wallets SET balance = balance - %s WHERE user_id = %s", (total_cost, user["uid"]))
+        cursor.execute(
+            "INSERT INTO portfolio (user_id, crypto, amount) VALUES (%s, %s, %s) "
+            "ON DUPLICATE KEY UPDATE amount = amount + %s",
+            (user["uid"], data.crypto, data.amount, data.amount)
+        )
+        conn.commit()
+        return {"message": "Crypto purchased successfully"}
     except Exception as e:
-        logger.error(f"Error fetching portfolio: {e}")
-        raise HTTPException(status_code=500, detail="Error fetching portfolio")
+        logger.error(f"Error buying crypto: {e}")
+        raise HTTPException(status_code=500, detail="Error processing trade")
+
+@app.post("/subscription")
+async def subscribe(data: SubscriptionData, request: Request):
+    user = await verify_user(request.headers.get("Authorization"))
+    try:
+        plan_price = 30 if data.plan.lower() == "basic" else 70
+        conn = db_pool.get_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("INSERT INTO subscriptions (user_id, plan, price, is_active) VALUES (%s, %s, %s, 1) ON DUPLICATE KEY UPDATE plan=%s, price=%s, is_active=1",
+                       (user["uid"], data.plan, plan_price, data.plan, plan_price))
+        conn.commit()
+        return {"message": f"Subscribed to {data.plan} plan successfully"}
+    except Exception as e:
+        logger.error(f"Error processing subscription: {e}")
+        raise HTTPException(status_code=500, detail="Error processing subscription")
