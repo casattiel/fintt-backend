@@ -2,7 +2,7 @@ import os
 import stripe
 import mysql.connector.pooling
 from mysql.connector import Error
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -32,19 +32,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize Firebase
+# Firebase private key configuration
 firebase_creds = {
     "type": "service_account",
-    "project_id": os.getenv("FIREBASE_PROJECT_ID"),
-    "private_key_id": os.getenv("FIREBASE_PRIVATE_KEY_ID"),
-    "private_key": os.getenv("FIREBASE_PRIVATE_KEY").replace("\\n", "\n"),
-    "client_email": os.getenv("FIREBASE_CLIENT_EMAIL"),
-    "client_id": os.getenv("FIREBASE_CLIENT_ID"),
-    "auth_uri": os.getenv("FIREBASE_AUTH_URI"),
-    "token_uri": os.getenv("FIREBASE_TOKEN_URI"),
-    "auth_provider_x509_cert_url": os.getenv("FIREBASE_AUTH_PROVIDER_CERT_URL"),
-    "client_x509_cert_url": os.getenv("FIREBASE_CLIENT_CERT_URL"),
+    "project_id": "fintt-f8479",
+    "private_key_id": "b0484c643022c5cf96b30797cb43f991561d7889",
+    "private_key": """-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCLoP/zmvA2XoXo
+... (truncated for brevity)
+-----END PRIVATE KEY-----""",
+    "client_email": "firebase-adminsdk-xzgvh@fintt-f8479.iam.gserviceaccount.com",
+    "client_id": "113725028417258551792",
+    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+    "token_uri": "https://oauth2.googleapis.com/token",
+    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+    "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-xzgvh@fintt-f8479.iam.gserviceaccount.com"
 }
+
 cred = credentials.Certificate(firebase_creds)
 initialize_app(cred)
 
@@ -101,7 +105,6 @@ async def root():
 @app.post("/register")
 async def register_user(data: RegisterData):
     try:
-        # Create a new Firebase user
         user = auth.create_user(email=data.email, password=data.password)
         return {"message": "User registered successfully", "uid": user.uid}
     except Exception as e:
@@ -112,7 +115,6 @@ async def register_user(data: RegisterData):
 @app.post("/login")
 async def login_user(data: LoginData):
     try:
-        # Firebase does not allow password verification directly from Admin SDK
         user = auth.get_user_by_email(data.email)
         token = auth.create_custom_token(user.uid)
         return {"message": "Login successful", "token": token.decode("utf-8")}
