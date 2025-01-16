@@ -67,6 +67,14 @@ db_config = {
 db_pool = mysql.connector.pooling.MySQLConnectionPool(pool_name="mypool", pool_size=5, **db_config)
 
 # Models
+class LoginData(BaseModel):
+    email: str
+    password: str
+
+class RegisterData(BaseModel):
+    email: str
+    password: str
+
 class TradeData(BaseModel):
     crypto: str
     amount: float
@@ -88,6 +96,29 @@ async def startup_event():
 @app.get("/")
 async def root():
     return {"message": "FINTT Backend is running with optimized functionality!"}
+
+# User Registration
+@app.post("/register")
+async def register_user(data: RegisterData):
+    try:
+        # Create a new Firebase user
+        user = auth.create_user(email=data.email, password=data.password)
+        return {"message": "User registered successfully", "uid": user.uid}
+    except Exception as e:
+        logger.error(f"Error registering user: {e}")
+        raise HTTPException(status_code=400, detail="Error registering user")
+
+# User Login
+@app.post("/login")
+async def login_user(data: LoginData):
+    try:
+        # Firebase does not allow password verification directly from Admin SDK
+        user = auth.get_user_by_email(data.email)
+        token = auth.create_custom_token(user.uid)
+        return {"message": "Login successful", "token": token.decode("utf-8")}
+    except Exception as e:
+        logger.error(f"Error logging in: {e}")
+        raise HTTPException(status_code=401, detail="Invalid email or password")
 
 # Utility functions
 def kraken_api_request(endpoint: str, data=None, is_private=False):
@@ -151,6 +182,48 @@ async def get_market_data():
         logger.error(f"Error fetching market data: {e}")
         raise HTTPException(status_code=500, detail="Error fetching market data")
 
+@app.get("/wallet")
+async def get_wallet_data(request: Request):
+    user = await verify_user(request.headers.get("Authorization"))
+    try:
+        conn = db_pool.get_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT type, balance FROM wallets WHERE user_id = %s", (user["uid"],))
+        wallets = cursor.fetchall()
+        conn.close()
+        return {"wallets": wallets}
+    except Exception as e:
+        logger.error(f"Error fetching wallet data: {e}")
+        raise HTTPException(status_code=500, detail="Error fetching wallet data")
+
+@app.get("/notifications")
+async def get_notifications(request: Request):
+    user = await verify_user(request.headers.get("Authorization"))
+    try:
+        conn = db_pool.get_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT message, date FROM notifications WHERE user_id = %s ORDER BY date DESC", (user["uid"],))
+        notifications = cursor.fetchall()
+        conn.close()
+        return {"notifications": notifications}
+    except Exception as e:
+        logger.error(f"Error fetching notifications: {e}")
+        raise HTTPException(status_code=500, detail="Error fetching notifications")
+
+@app.get("/portfolio")
+async def get_portfolio(request: Request):
+    user = await verify_user(request.headers.get("Authorization"))
+    try:
+        conn = db_pool.get_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT crypto, amount FROM portfolio WHERE user_id = %s", (user["uid"],))
+        portfolio = cursor.fetchall()
+        conn.close()
+        return {"portfolio": portfolio}
+    except Exception as e:
+        logger.error(f"Error fetching portfolio: {e}")
+        raise HTTPException(status_code=500, detail="Error fetching portfolio")
+
 @app.post("/trade/buy")
 async def buy_crypto(data: TradeData, request: Request):
     user = await verify_user(request.headers.get("Authorization"))
@@ -181,6 +254,34 @@ async def buy_crypto(data: TradeData, request: Request):
         return {"message": "Crypto purchased successfully"}
     except Exception as e:
         logger.error(f"Error buying crypto: {e}")
+        raise HTTPException(status_code=500, detail="Error processing trade")
+
+@app.post("/trade/sell")
+async def sell_crypto(data: TradeData, request: Request):
+    user = await verify_user(request.headers.get("Authorization"))
+    try:
+        pair = f"X{data.crypto}ZUSD"
+        response = kraken_api_request(f"public/Ticker?pair={pair}")
+        if "error" in response and response["error"]:
+            raise HTTPException(status_code=404, detail="Crypto not found")
+
+        price = float(response["result"][pair]["c"][0])
+        total_earnings = price * data.amount
+
+        conn = db_pool.get_connection()
+        cursor = conn.cursor(dictionary=True)
+
+        cursor.execute("SELECT amount FROM portfolio WHERE user_id = %s AND crypto = %s", (user["uid"], data.crypto))
+        portfolio = cursor.fetchone()
+        if not portfolio or portfolio["amount"] < data.amount:
+            raise HTTPException(status_code=400, detail="Insufficient crypto balance")
+
+        cursor.execute("UPDATE portfolio SET amount = amount - %s WHERE user_id = %s AND crypto = %s", (data.amount, user["uid"], data.crypto))
+        cursor.execute("UPDATE wallets SET balance = balance + %s WHERE user_id = %s", (total_earnings, user["uid"]))
+        conn.commit()
+        return {"message": "Crypto sold successfully"}
+    except Exception as e:
+        logger.error(f"Error selling crypto: {e}")
         raise HTTPException(status_code=500, detail="Error processing trade")
 
 @app.post("/subscription")
